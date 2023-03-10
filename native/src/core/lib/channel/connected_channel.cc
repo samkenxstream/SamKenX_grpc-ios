@@ -327,10 +327,11 @@ class ConnectedChannelStream : public Orphanable {
 
   void SchedulePush(grpc_transport_stream_op_batch* batch)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    batch->is_traced = GetContext<CallContext>()->traced();
     if (grpc_call_trace.enabled()) {
       gpr_log(GPR_DEBUG, "%s[connected] Push batch to transport: %s",
               Activity::current()->DebugTag().c_str(),
-              grpc_transport_stream_op_batch_string(batch).c_str());
+              grpc_transport_stream_op_batch_string(batch, false).c_str());
     }
     if (push_batches_.empty()) {
       IncrementRefCount("push");
@@ -353,7 +354,7 @@ class ConnectedChannelStream : public Orphanable {
     if (auto* next = absl::get_if<PipeReceiverNextType<MessageHandle>>(
             &send_message_state_)) {
       auto r = (*next)();
-      if (auto* p = absl::get_if<NextResult<MessageHandle>>(&r)) {
+      if (auto* p = r.value_if_ready()) {
         memset(&send_message_, 0, sizeof(send_message_));
         send_message_.payload = batch_payload();
         send_message_.on_complete = &send_message_batch_done_;
@@ -428,7 +429,7 @@ class ConnectedChannelStream : public Orphanable {
     if (auto* push = absl::get_if<PipeSender<MessageHandle>::PushType>(
             &recv_message_state_)) {
       auto r = (*push)();
-      if (bool* result = absl::get_if<bool>(&r)) {
+      if (bool* result = r.value_if_ready()) {
         if (*result) {
           if (!finished_) {
             if (grpc_call_trace.enabled()) {
@@ -712,8 +713,6 @@ class ClientStream : public ConnectedChannelStream {
       metadata_.on_complete = &metadata_batch_done_;
       batch_payload()->send_initial_metadata.send_initial_metadata =
           client_initial_metadata_.get();
-      batch_payload()->send_initial_metadata.peer_string =
-          GetContext<CallContext>()->peer_string_atm_ptr();
       server_initial_metadata_ =
           GetContext<Arena>()->MakePooled<ServerMetadata>(GetContext<Arena>());
       batch_payload()->recv_initial_metadata.recv_initial_metadata =
@@ -722,7 +721,6 @@ class ClientStream : public ConnectedChannelStream {
           &recv_initial_metadata_ready_;
       batch_payload()->recv_initial_metadata.trailing_metadata_available =
           nullptr;
-      batch_payload()->recv_initial_metadata.peer_string = nullptr;
       server_trailing_metadata_ =
           GetContext<Arena>()->MakePooled<ServerMetadata>(GetContext<Arena>());
       batch_payload()->recv_trailing_metadata.recv_trailing_metadata =
@@ -748,7 +746,7 @@ class ClientStream : public ConnectedChannelStream {
     if (server_initial_metadata_state_ ==
         ServerInitialMetadataState::kPushing) {
       auto r = (*server_initial_metadata_push_promise_)();
-      if (absl::holds_alternative<bool>(r)) {
+      if (r.ready()) {
         server_initial_metadata_state_ = ServerInitialMetadataState::kPushed;
         server_initial_metadata_push_promise_.reset();
       }
@@ -978,7 +976,7 @@ class ServerStream final : public ConnectedChannelStream {
               absl::get_if<PipeReceiverNextType<ServerMetadataHandle>>(
                   &server_initial_metadata_)) {
         auto r = (*promise)();
-        if (auto* md = absl::get_if<NextResult<ServerMetadataHandle>>(&r)) {
+        if (auto* md = r.value_if_ready()) {
           if (grpc_call_trace.enabled()) {
             gpr_log(
                 GPR_INFO, "%s[connected] got initial metadata %s",
@@ -994,7 +992,6 @@ class ServerStream final : public ConnectedChannelStream {
               server_initial_metadata_
                   .emplace<ServerMetadataHandle>(std::move(**md))
                   .get();
-          batch_payload()->send_initial_metadata.peer_string = nullptr;
           SchedulePush(&send_initial_metadata_);
           return true;
         } else {
@@ -1056,7 +1053,7 @@ class ServerStream final : public ConnectedChannelStream {
         PollSendMessage(p->outgoing_messages, nullptr);
       }
       auto poll = p->promise();
-      if (auto* r = absl::get_if<ServerMetadataHandle>(&poll)) {
+      if (auto* r = poll.value_if_ready()) {
         if (grpc_call_trace.enabled()) {
           gpr_log(GPR_INFO, "%s[connected] got trailing metadata %s; %s",
                   Activity::current()->DebugTag().c_str(),

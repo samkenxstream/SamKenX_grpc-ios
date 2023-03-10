@@ -37,6 +37,7 @@
 #include "src/core/lib/event_engine/windows/iocp.h"
 #include "src/core/lib/event_engine/windows/windows_endpoint.h"
 #include "src/core/lib/event_engine/windows/windows_engine.h"
+#include "src/core/lib/event_engine/windows/windows_listener.h"
 #include "src/core/lib/gprpp/crash.h"
 #include "src/core/lib/gprpp/sync.h"
 #include "src/core/lib/gprpp/time.h"
@@ -106,6 +107,7 @@ WindowsEventEngine::WindowsEventEngine()
 }
 
 WindowsEventEngine::~WindowsEventEngine() {
+  GRPC_EVENT_ENGINE_TRACE("~WindowsEventEngine::%p", this);
   {
     grpc_core::MutexLock lock(&task_mu_);
     if (GRPC_TRACE_FLAG_ENABLED(grpc_event_engine_trace)) {
@@ -184,9 +186,11 @@ bool WindowsEventEngine::IsWorkerThread() { grpc_core::Crash("unimplemented"); }
 void WindowsEventEngine::OnConnectCompleted(
     std::shared_ptr<ConnectionState> state) {
   absl::StatusOr<std::unique_ptr<WindowsEndpoint>> endpoint;
+  EventEngine::OnConnectCallback cb;
   {
     // Connection attempt complete!
     grpc_core::MutexLock lock(&state->mu);
+    cb = std::move(state->on_connected_user_callback);
     state->on_connected = nullptr;
     {
       grpc_core::MutexLock handle_lock(&connection_mu_);
@@ -204,10 +208,10 @@ void WindowsEventEngine::OnConnectCompleted(
       ChannelArgsEndpointConfig cfg;
       endpoint = std::make_unique<WindowsEndpoint>(
           state->address, std::move(state->socket), std::move(state->allocator),
-          cfg, executor_.get());
+          cfg, executor_.get(), shared_from_this());
     }
   }
-  state->on_connected_user_callback(std::move(endpoint));
+  cb(std::move(endpoint));
 }
 
 EventEngine::ConnectionHandle WindowsEventEngine::Connect(
@@ -379,9 +383,11 @@ WindowsEventEngine::CreateListener(
     absl::AnyInvocable<void(absl::Status)> on_shutdown,
     const EndpointConfig& config,
     std::unique_ptr<MemoryAllocatorFactory> memory_allocator_factory) {
-  grpc_core::Crash("unimplemented");
+  return std::make_unique<WindowsEventEngineListener>(
+      &iocp_, std::move(on_accept), std::move(on_shutdown),
+      std::move(memory_allocator_factory), shared_from_this(), executor_.get(),
+      config);
 }
-
 }  // namespace experimental
 }  // namespace grpc_event_engine
 
