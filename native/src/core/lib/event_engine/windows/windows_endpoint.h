@@ -29,17 +29,17 @@ class WindowsEndpoint : public EventEngine::Endpoint {
   WindowsEndpoint(const EventEngine::ResolvedAddress& peer_address,
                   std::unique_ptr<WinSocket> socket,
                   MemoryAllocator&& allocator, const EndpointConfig& config,
-                  Executor* Executor);
+                  Executor* Executor, std::shared_ptr<EventEngine> engine);
   ~WindowsEndpoint() override;
-  void Read(absl::AnyInvocable<void(absl::Status)> on_read, SliceBuffer* buffer,
+  bool Read(absl::AnyInvocable<void(absl::Status)> on_read, SliceBuffer* buffer,
             const ReadArgs* args) override;
-  void Write(absl::AnyInvocable<void(absl::Status)> on_writable,
+  bool Write(absl::AnyInvocable<void(absl::Status)> on_writable,
              SliceBuffer* data, const WriteArgs* args) override;
   const EventEngine::ResolvedAddress& GetPeerAddress() const override;
   const EventEngine::ResolvedAddress& GetLocalAddress() const override;
 
  private:
-  class AsyncIOState;
+  struct AsyncIOState;
 
   // Permanent closure type for Read callbacks
   class HandleReadClosure : public EventEngine::Closure {
@@ -93,6 +93,7 @@ class WindowsEndpoint : public EventEngine::Endpoint {
   MemoryAllocator allocator_;
   Executor* executor_;
   std::shared_ptr<AsyncIOState> io_state_;
+  std::shared_ptr<EventEngine> engine_;
 };
 
 }  // namespace experimental
