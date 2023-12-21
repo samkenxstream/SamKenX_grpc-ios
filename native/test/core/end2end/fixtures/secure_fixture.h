@@ -18,6 +18,8 @@
 #include <string>
 #include <utility>
 
+#include "absl/functional/any_invocable.h"
+
 #include <grpc/grpc.h>
 #include <grpc/grpc_security.h>
 #include <grpc/support/log.h>
@@ -29,7 +31,7 @@
 
 // Base class for a fixture that just needs to select cred types (or mutate
 // client/server channel args).
-class SecureFixture : public CoreTestFixture {
+class SecureFixture : public grpc_core::CoreTestFixture {
  public:
   explicit SecureFixture(std::string localaddr = grpc_core::JoinHostPort(
                              "localhost", grpc_pick_unused_port_or_die()))
@@ -49,17 +51,21 @@ class SecureFixture : public CoreTestFixture {
   virtual grpc_core::ChannelArgs MutateServerArgs(grpc_core::ChannelArgs args) {
     return args;
   }
-  grpc_server* MakeServer(const grpc_core::ChannelArgs& in_args) override {
+  grpc_server* MakeServer(
+      const grpc_core::ChannelArgs& in_args, grpc_completion_queue* cq,
+      absl::AnyInvocable<void(grpc_server*)>& pre_server_start) override {
     auto args = MutateServerArgs(in_args);
     auto* creds = MakeServerCreds(args);
     auto* server = grpc_server_create(args.ToC().get(), nullptr);
-    grpc_server_register_completion_queue(server, cq(), nullptr);
+    grpc_server_register_completion_queue(server, cq, nullptr);
     GPR_ASSERT(grpc_server_add_http2_port(server, localaddr_.c_str(), creds));
     grpc_server_credentials_release(creds);
+    pre_server_start(server);
     grpc_server_start(server);
     return server;
   }
-  grpc_channel* MakeClient(const grpc_core::ChannelArgs& in_args) override {
+  grpc_channel* MakeClient(const grpc_core::ChannelArgs& in_args,
+                           grpc_completion_queue*) override {
     auto args = MutateClientArgs(in_args);
     auto* creds = MakeClientCreds(args);
     auto* client =

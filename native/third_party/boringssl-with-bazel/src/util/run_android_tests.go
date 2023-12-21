@@ -12,6 +12,8 @@
 // OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 // CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+//go:build ignore
+
 package main
 
 import (
@@ -308,6 +310,20 @@ func main() {
 			"BUILDING.md",
 		)
 
+		err := filepath.Walk("pki/testdata/", func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.Mode().IsRegular() {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil {
+			fmt.Printf("Can't walk pki/testdata: %s\n", err)
+			os.Exit(1)
+		}
+
 		tests, err := testconfig.ParseTestConfig("util/all_tests.json")
 		if err != nil {
 			fmt.Printf("Failed to parse input: %s\n", err)
@@ -369,6 +385,7 @@ func main() {
 	if _, err := os.Stat(filepath.Join(*buildDir, "crypto/libcrypto.so")); err == nil {
 		libraries = []string{
 			"libboringssl_gtest.so",
+			"libpki.so",
 			"crypto/libcrypto.so",
 			"decrepit/libdecrepit.so",
 			"ssl/libssl.so",

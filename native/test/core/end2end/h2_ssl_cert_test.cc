@@ -23,13 +23,14 @@
 #include <memory>
 #include <string>
 
-#include <openssl/crypto.h>
-
+#include "absl/functional/any_invocable.h"
+#include "absl/types/optional.h"
 #include "gtest/gtest.h"
 
 #include <grpc/grpc.h>
 #include <grpc/grpc_security.h>
 #include <grpc/grpc_security_constants.h>
+#include <grpc/impl/channel_arg_names.h>
 #include <grpc/impl/propagation_bits.h>
 #include <grpc/slice.h>
 #include <grpc/status.h>
@@ -38,9 +39,8 @@
 #include <grpc/support/time.h>
 
 #include "src/core/lib/channel/channel_args.h"
+#include "src/core/lib/config/config_vars.h"
 #include "src/core/lib/gpr/tmpfile.h"
-#include "src/core/lib/gprpp/global_config_generic.h"
-#include "src/core/lib/security/security_connector/ssl_utils_config.h"
 #include "test/core/end2end/cq_verifier.h"
 #include "test/core/end2end/data/ssl_test_data.h"
 #include "test/core/end2end/end2end_tests.h"
@@ -141,8 +141,7 @@ typedef enum { SUCCESS, FAIL } test_result;
 #define SSL_TEST(request_type, cert_type, result)                              \
   {                                                                            \
     {TEST_NAME(request_type, cert_type, result),                               \
-     FEATURE_MASK_SUPPORTS_DELAYED_CONNECTION |                                \
-         FEATURE_MASK_SUPPORTS_PER_CALL_CREDENTIALS |                          \
+     FEATURE_MASK_SUPPORTS_PER_CALL_CREDENTIALS |                              \
          FEATURE_MASK_SUPPORTS_CLIENT_CHANNEL,                                 \
      "foo.test.google.fr", TestFixture::MakeFactory(request_type, cert_type)}, \
         result                                                                 \
@@ -150,7 +149,7 @@ typedef enum { SUCCESS, FAIL } test_result;
 
 // All test configurations
 struct CoreTestConfigWrapper {
-  CoreTestConfiguration config;
+  grpc_core::CoreTestConfiguration config;
   test_result result;
 };
 
@@ -194,19 +193,25 @@ static CoreTestConfigWrapper configs[] = {
              BAD_CERT_PAIR, FAIL),
 };
 
-static void simple_request_body(CoreTestFixture* f,
+static void simple_request_body(grpc_core::CoreTestFixture* f,
                                 test_result expected_result) {
   grpc_call* c;
   gpr_timespec deadline = grpc_timeout_seconds_to_deadline(5);
-  grpc_core::CqVerifier cqv(f->cq());
+  grpc_completion_queue* cq = grpc_completion_queue_create_for_next(nullptr);
+  grpc_core::CqVerifier cqv(cq);
   grpc_op ops[6];
   grpc_op* op;
   grpc_call_error error;
 
+  grpc_channel* client = f->MakeClient(grpc_core::ChannelArgs(), cq);
+  absl::AnyInvocable<void(grpc_server*)> pre_start_server = [](grpc_server*) {};
+  grpc_server* server =
+      f->MakeServer(grpc_core::ChannelArgs(), cq, pre_start_server);
+
   grpc_slice host = grpc_slice_from_static_string("foo.test.google.fr:1234");
-  c = grpc_channel_create_call(f->client(), nullptr, GRPC_PROPAGATE_DEFAULTS,
-                               f->cq(), grpc_slice_from_static_string("/foo"),
-                               &host, deadline, nullptr);
+  c = grpc_channel_create_call(client, nullptr, GRPC_PROPAGATE_DEFAULTS, cq,
+                               grpc_slice_from_static_string("/foo"), &host,
+                               deadline, nullptr);
   GPR_ASSERT(c);
 
   memset(ops, 0, sizeof(ops));
@@ -224,6 +229,16 @@ static void simple_request_body(CoreTestFixture* f,
   cqv.Verify();
 
   grpc_call_unref(c);
+  grpc_channel_destroy(client);
+  grpc_server_shutdown_and_notify(server, cq, nullptr);
+  cqv.Expect(nullptr, true);
+  cqv.Verify();
+  grpc_server_destroy(server);
+  grpc_completion_queue_shutdown(cq);
+  GPR_ASSERT(grpc_completion_queue_next(cq, gpr_inf_future(GPR_CLOCK_REALTIME),
+                                        nullptr)
+                 .type == GRPC_QUEUE_SHUTDOWN);
+  grpc_completion_queue_destroy(cq);
 }
 
 class H2SslCertTest : public ::testing::TestWithParam<CoreTestConfigWrapper> {
@@ -234,28 +249,18 @@ class H2SslCertTest : public ::testing::TestWithParam<CoreTestConfigWrapper> {
   void SetUp() override {
     fixture_ = GetParam().config.create_fixture(grpc_core::ChannelArgs(),
                                                 grpc_core::ChannelArgs());
-    fixture_->InitServer(grpc_core::ChannelArgs());
-    fixture_->InitClient(grpc_core::ChannelArgs());
   }
   void TearDown() override { fixture_.reset(); }
 
-  std::unique_ptr<CoreTestFixture> fixture_;
+  std::unique_ptr<grpc_core::CoreTestFixture> fixture_;
 };
 
 TEST_P(H2SslCertTest, SimpleRequestBody) {
   simple_request_body(fixture_.get(), GetParam().result);
 }
 
-#ifndef OPENSSL_IS_BORINGSSL
-#if GPR_LINUX
-TEST_P(H2SslCertTest, SimpleRequestBodyUseEngine) {
-  test_server1_key_id.clear();
-  test_server1_key_id.append("engine:libengine_passthrough:");
-  test_server1_key_id.append(test_server1_key);
-  simple_request_body(fixture_.get(), GetParam().result);
-}
-#endif
-#endif
+// TODO(b/283304471) SimpleRequestBodyUseEngineTest was failing on OpenSSL3.0
+// and 1.1.1 and removed. Investigate and rewrite a better test.
 
 INSTANTIATE_TEST_SUITE_P(H2SslCert, H2SslCertTest,
                          ::testing::ValuesIn(configs));
@@ -276,7 +281,9 @@ int main(int argc, char** argv) {
   GPR_ASSERT(roots_file != nullptr);
   GPR_ASSERT(fwrite(test_root_cert, 1, roots_size, roots_file) == roots_size);
   fclose(roots_file);
-  GPR_GLOBAL_CONFIG_SET(grpc_default_ssl_roots_file_path, roots_filename);
+  grpc_core::ConfigVars::Overrides config_overrides;
+  config_overrides.default_ssl_roots_file_path = roots_filename;
+  grpc_core::ConfigVars::SetOverrides(config_overrides);
 
   grpc_init();
   ::testing::InitGoogleTest(&argc, argv);

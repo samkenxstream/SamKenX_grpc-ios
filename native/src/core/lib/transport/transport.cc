@@ -26,14 +26,20 @@
 #include <new>
 
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 
 #include <grpc/event_engine/event_engine.h>
+#include <grpc/grpc.h>
 
 #include "src/core/lib/event_engine/default_event_engine.h"
-#include "src/core/lib/gpr/alloc.h"
+#include "src/core/lib/gprpp/time.h"
 #include "src/core/lib/iomgr/exec_ctx.h"
+#include "src/core/lib/promise/for_each.h"
+#include "src/core/lib/promise/promise.h"
+#include "src/core/lib/promise/try_seq.h"
 #include "src/core/lib/slice/slice.h"
-#include "src/core/lib/transport/transport_impl.h"
+#include "src/core/lib/transport/error_utils.h"
 
 grpc_core::DebugOnlyTraceFlag grpc_trace_stream_refcount(false,
                                                          "stream_refcount");
@@ -99,57 +105,20 @@ void grpc_transport_move_stats(grpc_transport_stream_stats* from,
   to->latency = std::exchange(from->latency, gpr_inf_future(GPR_TIMESPAN));
 }
 
-size_t grpc_transport_stream_size(grpc_transport* transport) {
-  return GPR_ROUND_UP_TO_ALIGNMENT_SIZE(transport->vtable->sizeof_stream);
-}
-
-void grpc_transport_destroy(grpc_transport* transport) {
-  transport->vtable->destroy(transport);
-}
-
-int grpc_transport_init_stream(grpc_transport* transport, grpc_stream* stream,
-                               grpc_stream_refcount* refcount,
-                               const void* server_data,
-                               grpc_core::Arena* arena) {
-  return transport->vtable->init_stream(transport, stream, refcount,
-                                        server_data, arena);
-}
-
-void grpc_transport_perform_stream_op(grpc_transport* transport,
-                                      grpc_stream* stream,
-                                      grpc_transport_stream_op_batch* op) {
-  transport->vtable->perform_stream_op(transport, stream, op);
-}
-
-void grpc_transport_perform_op(grpc_transport* transport,
-                               grpc_transport_op* op) {
-  transport->vtable->perform_op(transport, op);
-}
-
-void grpc_transport_set_pops(grpc_transport* transport, grpc_stream* stream,
-                             grpc_polling_entity* pollent) {
-  grpc_pollset* pollset;
-  grpc_pollset_set* pollset_set;
-  if ((pollset = grpc_polling_entity_pollset(pollent)) != nullptr) {
-    transport->vtable->set_pollset(transport, stream, pollset);
-  } else if ((pollset_set = grpc_polling_entity_pollset_set(pollent)) !=
-             nullptr) {
-    transport->vtable->set_pollset_set(transport, stream, pollset_set);
+namespace grpc_core {
+void Transport::SetPollingEntity(grpc_stream* stream,
+                                 grpc_polling_entity* pollset_or_pollset_set) {
+  if (auto* pollset = grpc_polling_entity_pollset(pollset_or_pollset_set)) {
+    SetPollset(stream, pollset);
+  } else if (auto* pollset_set =
+                 grpc_polling_entity_pollset_set(pollset_or_pollset_set)) {
+    SetPollsetSet(stream, pollset_set);
   } else {
     // No-op for empty pollset. Empty pollset is possible when using
     // non-fd-based event engines such as CFStream.
   }
 }
-
-void grpc_transport_destroy_stream(grpc_transport* transport,
-                                   grpc_stream* stream,
-                                   grpc_closure* then_schedule_closure) {
-  transport->vtable->destroy_stream(transport, stream, then_schedule_closure);
-}
-
-grpc_endpoint* grpc_transport_get_endpoint(grpc_transport* transport) {
-  return transport->vtable->get_endpoint(transport);
-}
+}  // namespace grpc_core
 
 // This comment should be sung to the tune of
 // "Supercalifragilisticexpialidocious":
@@ -271,11 +240,98 @@ namespace grpc_core {
 ServerMetadataHandle ServerMetadataFromStatus(const absl::Status& status,
                                               Arena* arena) {
   auto hdl = arena->MakePooled<ServerMetadata>(arena);
-  hdl->Set(GrpcStatusMetadata(), static_cast<grpc_status_code>(status.code()));
+  grpc_status_code code;
+  std::string message;
+  grpc_error_get_status(status, Timestamp::InfFuture(), &code, &message,
+                        nullptr, nullptr);
+  hdl->Set(GrpcStatusMetadata(), code);
   if (!status.ok()) {
-    hdl->Set(GrpcMessageMetadata(), Slice::FromCopiedString(status.message()));
+    hdl->Set(GrpcMessageMetadata(), Slice::FromCopiedString(message));
   }
   return hdl;
+}
+
+std::string Message::DebugString() const {
+  std::string out = absl::StrCat(payload_.Length(), "b");
+  auto flags = flags_;
+  auto explain = [&flags, &out](uint32_t flag, absl::string_view name) {
+    if (flags & flag) {
+      flags &= ~flag;
+      absl::StrAppend(&out, ":", name);
+    }
+  };
+  explain(GRPC_WRITE_BUFFER_HINT, "write_buffer");
+  explain(GRPC_WRITE_NO_COMPRESS, "no_compress");
+  explain(GRPC_WRITE_THROUGH, "write_through");
+  explain(GRPC_WRITE_INTERNAL_COMPRESS, "compress");
+  explain(GRPC_WRITE_INTERNAL_TEST_ONLY_WAS_COMPRESSED, "was_compressed");
+  if (flags != 0) {
+    absl::StrAppend(&out, ":huh=0x", absl::Hex(flags));
+  }
+  return out;
+}
+
+void ForwardCall(CallHandler call_handler, CallInitiator call_initiator,
+                 ClientMetadataHandle client_initial_metadata) {
+  // Send initial metadata.
+  call_initiator.SpawnGuarded(
+      "send_initial_metadata",
+      [client_initial_metadata = std::move(client_initial_metadata),
+       call_initiator]() mutable {
+        return call_initiator.PushClientInitialMetadata(
+            std::move(client_initial_metadata));
+      });
+  // Read messages from handler into initiator.
+  call_handler.SpawnGuarded(
+      "read_messages", [call_handler, call_initiator]() mutable {
+        return ForEach(OutgoingMessages(call_handler),
+                       [call_initiator](MessageHandle msg) mutable {
+                         // Need to spawn a job into the initiator's activity to
+                         // push the message in.
+                         return call_initiator.SpawnWaitable(
+                             "send_message",
+                             [msg = std::move(msg), call_initiator]() mutable {
+                               return call_initiator.CancelIfFails(Map(
+                                   call_initiator.PushMessage(std::move(msg)),
+                                   [](bool r) { return StatusFlag(r); }));
+                             });
+                       });
+      });
+  call_initiator.SpawnInfallible("read_the_things", [call_initiator,
+                                                     call_handler]() mutable {
+    return Seq(
+        call_initiator.CancelIfFails(TrySeq(
+            call_initiator.PullServerInitialMetadata(),
+            [call_handler](ServerMetadataHandle md) mutable {
+              call_handler.SpawnGuarded(
+                  "recv_initial_metadata",
+                  [md = std::move(md), call_handler]() mutable {
+                    return call_handler.PushServerInitialMetadata(
+                        std::move(md));
+                  });
+              return Success{};
+            },
+            ForEach(OutgoingMessages(call_initiator),
+                    [call_handler](MessageHandle msg) mutable {
+                      return call_handler.SpawnWaitable(
+                          "recv_message",
+                          [msg = std::move(msg), call_handler]() mutable {
+                            return call_handler.CancelIfFails(
+                                Map(call_handler.PushMessage(std::move(msg)),
+                                    [](bool r) { return StatusFlag(r); }));
+                          });
+                    }),
+            ImmediateOkStatus())),
+        call_initiator.PullServerTrailingMetadata(),
+        [call_handler](ServerMetadataHandle md) mutable {
+          call_handler.SpawnGuarded(
+              "recv_trailing_metadata",
+              [md = std::move(md), call_handler]() mutable {
+                return call_handler.PushServerTrailingMetadata(std::move(md));
+              });
+          return Empty{};
+        });
+  });
 }
 
 }  // namespace grpc_core

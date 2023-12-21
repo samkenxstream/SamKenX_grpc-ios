@@ -39,11 +39,13 @@ LocalTestFixture::LocalTestFixture(std::string localaddr,
                                    grpc_local_connect_type type)
     : localaddr_(std::move(localaddr)), type_(type) {}
 
-grpc_server* LocalTestFixture::MakeServer(const grpc_core::ChannelArgs& args) {
+grpc_server* LocalTestFixture::MakeServer(
+    const grpc_core::ChannelArgs& args, grpc_completion_queue* cq,
+    absl::AnyInvocable<void(grpc_server*)>& pre_server_start) {
   grpc_server_credentials* server_creds =
       grpc_local_server_credentials_create(type_);
   auto* server = grpc_server_create(args.ToC().get(), nullptr);
-  grpc_server_register_completion_queue(server, cq(), nullptr);
+  grpc_server_register_completion_queue(server, cq, nullptr);
   if (args.Contains(FAIL_AUTH_CHECK_SERVER_ARG_NAME)) {
     grpc_auth_metadata_processor processor = {process_auth_failure, nullptr,
                                               nullptr};
@@ -53,11 +55,13 @@ grpc_server* LocalTestFixture::MakeServer(const grpc_core::ChannelArgs& args) {
   GPR_ASSERT(
       grpc_server_add_http2_port(server, localaddr_.c_str(), server_creds));
   grpc_server_credentials_release(server_creds);
+  pre_server_start(server);
   grpc_server_start(server);
   return server;
 }
 
-grpc_channel* LocalTestFixture::MakeClient(const grpc_core::ChannelArgs& args) {
+grpc_channel* LocalTestFixture::MakeClient(const grpc_core::ChannelArgs& args,
+                                           grpc_completion_queue*) {
   grpc_channel_credentials* creds = grpc_local_credentials_create(type_);
   auto* client =
       grpc_channel_create(localaddr_.c_str(), creds, args.ToC().get());

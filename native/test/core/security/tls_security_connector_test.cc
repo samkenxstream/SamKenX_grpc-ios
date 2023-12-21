@@ -29,6 +29,7 @@
 #include <grpc/support/string_util.h>
 
 #include "src/core/lib/channel/channel_args.h"
+#include "src/core/lib/config/config_vars.h"
 #include "src/core/lib/gprpp/crash.h"
 #include "src/core/lib/gprpp/unique_type_name.h"
 #include "src/core/lib/iomgr/load_file.h"
@@ -36,7 +37,6 @@
 #include "src/core/lib/security/credentials/tls/grpc_tls_certificate_provider.h"
 #include "src/core/lib/security/credentials/tls/grpc_tls_credentials_options.h"
 #include "src/core/lib/security/credentials/tls/tls_credentials.h"
-#include "src/core/lib/security/security_connector/ssl_utils_config.h"
 #include "src/core/tsi/transport_security.h"
 #include "test/core/util/test_config.h"
 #include "test/core/util/tls_utils.h"
@@ -392,7 +392,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -428,7 +428,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -581,7 +581,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -617,7 +617,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -655,7 +655,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(7, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -703,7 +703,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(7, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.com",
@@ -761,8 +761,8 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   EXPECT_EQ(tsi_construct_peer(2, &peer), TSI_OK);
   EXPECT_EQ(
-      tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL, "grpc",
-                                         strlen("grpc"), &peer.properties[0]),
+      tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL, "h2",
+                                         strlen("h2"), &peer.properties[0]),
       TSI_OK);
   EXPECT_EQ(tsi_construct_string_peer_property_from_cstring(
                 TSI_X509_VERIFIED_ROOT_CERT_SUBECT_PEER_PROPERTY,
@@ -1012,7 +1012,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -1043,7 +1043,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -1078,7 +1078,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -1111,7 +1111,7 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   GPR_ASSERT(tsi_construct_peer(2, &peer) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL,
-                                                "grpc", strlen("grpc"),
+                                                "h2", strlen("h2"),
                                                 &peer.properties[0]) == TSI_OK);
   GPR_ASSERT(tsi_construct_string_peer_property_from_cstring(
                  TSI_X509_SUBJECT_COMMON_NAME_PEER_PROPERTY, "foo.bar.com",
@@ -1150,8 +1150,8 @@ TEST_F(TlsSecurityConnectorTest,
   tsi_peer peer;
   EXPECT_EQ(tsi_construct_peer(2, &peer), TSI_OK);
   EXPECT_EQ(
-      tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL, "grpc",
-                                         strlen("grpc"), &peer.properties[0]),
+      tsi_construct_string_peer_property(TSI_SSL_ALPN_SELECTED_PROTOCOL, "h2",
+                                         strlen("h2"), &peer.properties[0]),
       TSI_OK);
   EXPECT_EQ(tsi_construct_string_peer_property_from_cstring(
                 TSI_X509_VERIFIED_ROOT_CERT_SUBECT_PEER_PROPERTY,
@@ -1169,7 +1169,9 @@ TEST_F(TlsSecurityConnectorTest,
 
 int main(int argc, char** argv) {
   grpc::testing::TestEnvironment env(&argc, argv);
-  GPR_GLOBAL_CONFIG_SET(grpc_default_ssl_roots_file_path, CA_CERT_PATH);
+  grpc_core::ConfigVars::Overrides overrides;
+  overrides.default_ssl_roots_file_path = CA_CERT_PATH;
+  grpc_core::ConfigVars::SetOverrides(overrides);
   ::testing::InitGoogleTest(&argc, argv);
   grpc_init();
   int ret = RUN_ALL_TESTS();

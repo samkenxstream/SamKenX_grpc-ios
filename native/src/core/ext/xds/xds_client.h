@@ -30,7 +30,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "upb/def.hpp"
+#include "upb/reflection/def.hpp"
 
 #include <grpc/event_engine/event_engine.h>
 
@@ -63,7 +63,7 @@ class XdsClient : public DualRefCounted<XdsClient> {
   class ResourceWatcherInterface : public RefCounted<ResourceWatcherInterface> {
    public:
     virtual void OnGenericResourceChanged(
-        const XdsResourceType::ResourceData* resource)
+        std::shared_ptr<const XdsResourceType::ResourceData> resource)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(&work_serializer_) = 0;
     virtual void OnError(absl::Status status)
         ABSL_EXCLUSIVE_LOCKS_REQUIRED(&work_serializer_) = 0;
@@ -238,7 +238,7 @@ class XdsClient : public DualRefCounted<XdsClient> {
     std::map<ResourceWatcherInterface*, RefCountedPtr<ResourceWatcherInterface>>
         watchers;
     // The latest data seen for the resource.
-    std::unique_ptr<XdsResourceType::ResourceData> resource;
+    std::shared_ptr<const XdsResourceType::ResourceData> resource;
     XdsApi::ResourceMetadata meta;
     bool ignored_deletion = false;
   };
@@ -317,7 +317,7 @@ class XdsClient : public DualRefCounted<XdsClient> {
   // Stores resource type objects seen by type URL.
   std::map<absl::string_view /*resource_type*/, const XdsResourceType*>
       resource_types_ ABSL_GUARDED_BY(mu_);
-  upb::SymbolTable symtab_ ABSL_GUARDED_BY(mu_);
+  upb::DefPool def_pool_ ABSL_GUARDED_BY(mu_);
 
   // Map of existing xDS server channels.
   // Key is owned by the bootstrap config.
