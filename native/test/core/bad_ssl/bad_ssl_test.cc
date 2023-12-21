@@ -23,6 +23,7 @@
 
 #include <grpc/grpc.h>
 #include <grpc/grpc_security.h>
+#include <grpc/impl/channel_arg_names.h>
 #include <grpc/impl/propagation_bits.h>
 #include <grpc/slice.h>
 #include <grpc/status.h>
@@ -31,12 +32,11 @@
 #include <grpc/support/string_util.h>
 #include <grpc/support/time.h>
 
-#include "src/core/lib/gprpp/global_config_generic.h"
+#include "src/core/lib/gpr/subprocess.h"
+#include "src/core/lib/gprpp/env.h"
 #include "src/core/lib/gprpp/host_port.h"
-#include "src/core/lib/security/security_connector/ssl_utils_config.h"
 #include "test/core/end2end/cq_verifier.h"
 #include "test/core/util/port.h"
-#include "test/core/util/subprocess.h"
 #include "test/core/util/test_config.h"
 
 static void run_test(const char* target, size_t nops) {
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
     strcpy(root, ".");
   }
   if (argc == 2) {
-    GPR_GLOBAL_CONFIG_SET(grpc_default_ssl_roots_file_path, argv[1]);
+    grpc_core::SetEnv("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", argv[1]);
   }
   // figure out our test name
   tmp = lunder - 1;

@@ -20,7 +20,6 @@
 #include <stddef.h>
 
 #include <tuple>
-#include <type_traits>
 #include <utility>
 
 #include "src/core/lib/promise/detail/promise_like.h"
@@ -38,6 +37,13 @@ class Map {
  public:
   Map(Promise promise, Fn fn)
       : promise_(std::move(promise)), fn_(std::move(fn)) {}
+
+  Map(const Map&) = delete;
+  Map& operator=(const Map&) = delete;
+  // NOLINTNEXTLINE(performance-noexcept-move-constructor): clang6 bug
+  Map(Map&& other) = default;
+  // NOLINTNEXTLINE(performance-noexcept-move-constructor): clang6 bug
+  Map& operator=(Map&& other) = default;
 
   using PromiseResult = typename PromiseLike<Promise>::Result;
   using Result =

@@ -6,6 +6,7 @@ default	rel
 %define XMMWORD
 %define YMMWORD
 %define ZMMWORD
+%define _CET_ENDBR
 
 %ifdef BORINGSSL_PREFIX
 %include "boringssl_prefix_symbols_nasm.inc"
@@ -49,7 +50,7 @@ $L$sixteen:
 	DB	95,54,52,44,32,67,82,89,80,84,79,71,65,77,83,32
 	DB	98,121,32,60,97,112,112,114,111,64,111,112,101,110,115,115
 	DB	108,46,111,114,103,62,0
-section	.text code align=64
+section	.text
 
 global	ChaCha20_ctr32
 
@@ -67,6 +68,7 @@ $L$SEH_begin_ChaCha20_ctr32:
 
 
 
+_CET_ENDBR
 	cmp	rdx,0
 	je	NEAR $L$no_data
 	mov	r10,QWORD[((OPENSSL_ia32cap_P+4))]

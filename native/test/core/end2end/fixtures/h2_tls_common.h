@@ -29,6 +29,7 @@
 #include <grpc/grpc.h>
 #include <grpc/grpc_security.h>
 #include <grpc/grpc_security_constants.h>
+#include <grpc/impl/channel_arg_names.h>
 #include <grpc/slice.h>
 #include <grpc/status.h>
 #include <grpc/support/log.h>
@@ -229,9 +230,7 @@ class TlsFixture : public SecureFixture {
 };
 
 static const uint32_t kH2TLSFeatureMask =
-    FEATURE_MASK_SUPPORTS_DELAYED_CONNECTION |
     FEATURE_MASK_SUPPORTS_PER_CALL_CREDENTIALS |
-    FEATURE_MASK_SUPPORTS_CLIENT_CHANNEL |
-    FEATURE_MASK_SUPPORTS_AUTHORITY_HEADER;
+    FEATURE_MASK_SUPPORTS_CLIENT_CHANNEL | FEATURE_MASK_IS_HTTP2;
 
 #endif  // GRPC_TEST_CORE_END2END_FIXTURES_H2_TLS_COMMON_H

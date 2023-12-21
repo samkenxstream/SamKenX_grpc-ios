@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"boringssl.googlesource.com/boringssl/ssl/test/runner/hpke"
+	"golang.org/x/crypto/cryptobyte"
 )
 
 // serverHandshakeState contains details of a server handshake in progress.
@@ -280,10 +281,10 @@ func (hs *serverHandshakeState) readClientHello() error {
 		}
 	}
 
-	if config.Bugs.FailIfCECPQ2Offered {
+	if config.Bugs.FailIfKyberOffered {
 		for _, offeredCurve := range hs.clientHello.supportedCurves {
 			if isPqGroup(offeredCurve) {
-				return errors.New("tls: CECPQ2 was offered")
+				return errors.New("tls: X25519Kyber768 was offered")
 			}
 		}
 	}
@@ -957,7 +958,7 @@ ResendHelloRetryRequest:
 		// Once a curve has been selected and a key share identified,
 		// the server needs to generate a public value and send it in
 		// the ServerHello.
-		curve, ok := curveForCurveID(selectedCurve, config)
+		kem, ok := kemForCurveID(selectedCurve, config)
 		if !ok {
 			panic("tls: server failed to look up curve ID")
 		}
@@ -967,9 +968,9 @@ ResendHelloRetryRequest:
 		if config.Bugs.SkipHelloRetryRequest {
 			// If skipping HelloRetryRequest, use a random key to
 			// avoid crashing.
-			curve2, _ := curveForCurveID(selectedCurve, config)
+			kem2, _ := kemForCurveID(selectedCurve, config)
 			var err error
-			peerKey, err = curve2.offer(config.rand())
+			peerKey, err = kem2.generate(config.rand())
 			if err != nil {
 				return err
 			}
@@ -977,7 +978,7 @@ ResendHelloRetryRequest:
 			peerKey = selectedKeyShare.keyExchange
 		}
 
-		publicKey, ecdheSecret, err := curve.accept(config.rand(), peerKey)
+		ciphertext, ecdheSecret, err := kem.encap(config.rand(), peerKey)
 		if err != nil {
 			c.sendAlert(alertHandshakeFailure)
 			return err
@@ -991,19 +992,19 @@ ResendHelloRetryRequest:
 			curveID = config.Bugs.SendCurve
 		}
 		if c.config.Bugs.InvalidECDHPoint {
-			publicKey[0] ^= 0xff
+			ciphertext[0] ^= 0xff
 		}
 
 		hs.hello.keyShare = keyShareEntry{
 			group:       curveID,
-			keyExchange: publicKey,
+			keyExchange: ciphertext,
 		}
 
 		if config.Bugs.EncryptedExtensionsWithKeyShare {
 			encryptedExtensions.extensions.hasKeyShare = true
 			encryptedExtensions.extensions.keyShare = keyShareEntry{
 				group:       curveID,
-				keyExchange: publicKey,
+				keyExchange: ciphertext,
 			}
 		}
 	} else {
@@ -1467,7 +1468,7 @@ func (hs *serverHandshakeState) processClientHello() (isResume bool, err error) 
 Curves:
 	for _, curve := range hs.clientHello.supportedCurves {
 		if isPqGroup(curve) && c.vers < VersionTLS13 {
-			// CECPQ2 is TLS 1.3-only.
+			// Post-quantum is TLS 1.3 only.
 			continue
 		}
 
@@ -2076,7 +2077,7 @@ func (hs *serverHandshakeState) establishKeys() error {
 	clientMAC, serverMAC, clientKey, serverKey, clientIV, serverIV :=
 		keysFromMasterSecret(c.vers, hs.suite, hs.masterSecret, hs.clientHello.random, hs.hello.random, hs.suite.macLen, hs.suite.keyLen, hs.suite.ivLen(c.vers))
 
-	var clientCipher, serverCipher interface{}
+	var clientCipher, serverCipher any
 	var clientHash, serverHash macFunction
 
 	if hs.suite.aead == nil {
@@ -2443,18 +2444,18 @@ func checkClientHellosEqual(a, b []byte, isDTLS bool, ignoreExtensions []uint16)
 	}
 
 	// Skip the handshake message header.
-	aReader := byteReader(a[4:])
-	bReader := byteReader(b[4:])
+	aReader := cryptobyte.String(a[4:])
+	bReader := cryptobyte.String(b[4:])
 
 	var aVers, bVers uint16
 	var aRandom, bRandom []byte
 	var aSessionID, bSessionID []byte
-	if !aReader.readU16(&aVers) ||
-		!bReader.readU16(&bVers) ||
-		!aReader.readBytes(&aRandom, 32) ||
-		!bReader.readBytes(&bRandom, 32) ||
-		!aReader.readU8LengthPrefixedBytes(&aSessionID) ||
-		!bReader.readU8LengthPrefixedBytes(&bSessionID) {
+	if !aReader.ReadUint16(&aVers) ||
+		!bReader.ReadUint16(&bVers) ||
+		!aReader.ReadBytes(&aRandom, 32) ||
+		!bReader.ReadBytes(&bRandom, 32) ||
+		!readUint8LengthPrefixedBytes(&aReader, &aSessionID) ||
+		!readUint8LengthPrefixedBytes(&bReader, &bSessionID) {
 		return errors.New("tls: could not parse ClientHello")
 	}
 
@@ -2474,17 +2475,17 @@ func checkClientHellosEqual(a, b []byte, isDTLS bool, ignoreExtensions []uint16)
 		// cookie altogether. If we implement DTLS 1.3, we'll need to ensure
 		// that parsing logic above this function rejects this cookie.
 		var aCookie, bCookie []byte
-		if !aReader.readU8LengthPrefixedBytes(&aCookie) ||
-			!bReader.readU8LengthPrefixedBytes(&bCookie) {
+		if !readUint8LengthPrefixedBytes(&aReader, &aCookie) ||
+			!readUint8LengthPrefixedBytes(&bReader, &bCookie) {
 			return errors.New("tls: could not parse ClientHello")
 		}
 	}
 
 	var aCipherSuites, bCipherSuites, aCompressionMethods, bCompressionMethods []byte
-	if !aReader.readU16LengthPrefixedBytes(&aCipherSuites) ||
-		!bReader.readU16LengthPrefixedBytes(&bCipherSuites) ||
-		!aReader.readU8LengthPrefixedBytes(&aCompressionMethods) ||
-		!bReader.readU8LengthPrefixedBytes(&bCompressionMethods) {
+	if !readUint16LengthPrefixedBytes(&aReader, &aCipherSuites) ||
+		!readUint16LengthPrefixedBytes(&bReader, &bCipherSuites) ||
+		!readUint8LengthPrefixedBytes(&aReader, &aCompressionMethods) ||
+		!readUint8LengthPrefixedBytes(&bReader, &bCompressionMethods) {
 		return errors.New("tls: could not parse ClientHello")
 	}
 	if !bytes.Equal(aCipherSuites, bCipherSuites) {
@@ -2499,9 +2500,9 @@ func checkClientHellosEqual(a, b []byte, isDTLS bool, ignoreExtensions []uint16)
 		return nil
 	}
 
-	var aExtensions, bExtensions byteReader
-	if !aReader.readU16LengthPrefixed(&aExtensions) ||
-		!bReader.readU16LengthPrefixed(&bExtensions) ||
+	var aExtensions, bExtensions cryptobyte.String
+	if !aReader.ReadUint16LengthPrefixed(&aExtensions) ||
+		!bReader.ReadUint16LengthPrefixed(&bExtensions) ||
 		len(aReader) != 0 ||
 		len(bReader) != 0 {
 		return errors.New("tls: could not parse ClientHello")
@@ -2510,8 +2511,8 @@ func checkClientHellosEqual(a, b []byte, isDTLS bool, ignoreExtensions []uint16)
 	for len(aExtensions) != 0 {
 		var aID uint16
 		var aBody []byte
-		if !aExtensions.readU16(&aID) ||
-			!aExtensions.readU16LengthPrefixedBytes(&aBody) {
+		if !aExtensions.ReadUint16(&aID) ||
+			!readUint16LengthPrefixedBytes(&aExtensions, &aBody) {
 			return errors.New("tls: could not parse ClientHello")
 		}
 		if _, ok := ignoreExtensionsSet[aID]; ok {
@@ -2524,8 +2525,8 @@ func checkClientHellosEqual(a, b []byte, isDTLS bool, ignoreExtensions []uint16)
 			}
 			var bID uint16
 			var bBody []byte
-			if !bExtensions.readU16(&bID) ||
-				!bExtensions.readU16LengthPrefixedBytes(&bBody) {
+			if !bExtensions.ReadUint16(&bID) ||
+				!readUint16LengthPrefixedBytes(&bExtensions, &bBody) {
 				return errors.New("tls: could not parse ClientHello")
 			}
 			if _, ok := ignoreExtensionsSet[bID]; ok {
@@ -2546,8 +2547,8 @@ func checkClientHellosEqual(a, b []byte, isDTLS bool, ignoreExtensions []uint16)
 	for len(bExtensions) != 0 {
 		var id uint16
 		var body []byte
-		if !bExtensions.readU16(&id) ||
-			!bExtensions.readU16LengthPrefixedBytes(&body) {
+		if !bExtensions.ReadUint16(&id) ||
+			!readUint16LengthPrefixedBytes(&bExtensions, &body) {
 			return errors.New("tls: could not parse ClientHello")
 		}
 		if _, ok := ignoreExtensionsSet[id]; !ok {
